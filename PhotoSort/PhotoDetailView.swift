@@ -223,39 +223,18 @@ struct SinglePhotoView: View {
     
     @ViewBuilder
     private var controlsOverlay: some View {
-        ZStack {
-            // Close button
+        // Only show tag badge now - X button removed
+        if let tag = access.tag(for: assets[index]) {
             VStack {
-                HStack {
-                    Button(action: { showDetail = false }) {
-                        Image(systemName: "xmark")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 44)
-                            .background(Color.black.opacity(0.5))
-                            .clipShape(Circle())
-                    }
-                    .padding()
-                    
-                    Spacer()
-                }
                 Spacer()
-            }
-            
-            // Tag badge
-            if let tag = access.tag(for: assets[index]) {
-                VStack {
+                HStack {
                     Spacer()
-                    HStack {
-                        Spacer()
-                        TagBadge(tag: tag)
-                            .scaleEffect(1.5)
-                            .padding(24)
-                    }
+                    TagBadge(tag: tag)
+                        .scaleEffect(1.5)
+                        .padding(24)
                 }
             }
         }
-        .transition(.opacity)
     }
     
     private func loadThumbnailForCurrent() {
