@@ -24,6 +24,8 @@ struct ContentGridView: View {
     @State private var pressedIndex: Int? = nil
     @State private var touchStartTime: Date? = nil
     @State private var touchStartLocation: CGPoint? = nil
+    @State private var scrollDisabled = false
+    @State private var processedAssets: Set<String> = []  // Track which assets we've processed in this drag
     
     @Environment(\.verticalSizeClass) var verticalSizeClass
     
@@ -58,7 +60,7 @@ struct ContentGridView: View {
                 }
             }
             .animation(.spring(response: 0.4, dampingFraction: 0.8), value: filteredAssets.count)
-            // Removed scrollDisabled entirely
+            .scrollDisabled(scrollDisabled)  // Only disable when explicitly set
             .onChange(of: isSelecting) { newValue in
                 handleSelectionModeChange(newValue)
             }
@@ -90,12 +92,21 @@ struct ContentGridView: View {
             pressedIndex = nil
             touchStartTime = nil
             touchStartLocation = nil
+            scrollDisabled = false
+            initialSelectionState = false
+            processedAssets.removeAll()
         }
     }
     
     private func handleSelectedAssetsChange(_ newValue: Set<String>) {
         if newValue.isEmpty && longPressTriggered && !isSelecting {
             longPressTriggered = false
+            scrollDisabled = false
+            isDragging = false
+            dragStartAsset = nil
+            lastDraggedAsset = nil
+            initialSelectionState = false
+            processedAssets.removeAll()
         }
     }
     
@@ -134,7 +145,7 @@ struct ContentGridView: View {
                     isSelected: selectedAssets.contains(asset.localIdentifier),
                     onTap: { handleTap(for: asset, at: idx) },
                     onDragChanged: { value in
-                        handleCellDragChanged(value: value, asset: asset, idx: idx)
+                        handleCellDragChanged(value: value, asset: asset, idx: idx, geometry: geometry, cellSide: cellSide)
                     },
                     onDragEnded: {
                         handleCellDragEnded()
@@ -144,17 +155,20 @@ struct ContentGridView: View {
         }
         .padding(.horizontal, verticalSizeClass == .compact ? 6 : 8)  // Less padding in landscape
         .padding(.vertical, verticalSizeClass == .compact ? 6 : 8)  // Less padding in landscape
+        .coordinateSpace(name: "grid")  // Add coordinate space for consistent calculations
         .gesture(
-            // Only add the drag gesture when in selection mode
-            longPressTriggered ?
-            DragGesture(minimumDistance: 20)  // Increased minimum distance
+            // Grid-level drag gesture - only as fallback
+            DragGesture(minimumDistance: 20, coordinateSpace: .named("grid"))
                 .onChanged { value in
-                    handleGridDragChanged(value: value, geometry: geometry, cellSide: cellSide)
+                    if longPressTriggered && !isDragging {
+                        handleGridDragChanged(value: value, geometry: geometry, cellSide: cellSide)
+                    }
                 }
                 .onEnded { _ in
-                    handleGridDragEnded()
+                    if isDragging {
+                        handleGridDragEnded()
+                    }
                 }
-            : nil
         )
     }
     
@@ -166,10 +180,17 @@ struct ContentGridView: View {
                 selectedAssets.remove(asset.localIdentifier)
                 if selectedAssets.isEmpty && longPressTriggered {
                     longPressTriggered = false
+                    scrollDisabled = false
+                    isDragging = false
+                    dragStartAsset = nil
+                    lastDraggedAsset = nil
+                    initialSelectionState = false
+                    processedAssets.removeAll()
                 }
             } else {
                 if !isSelecting && !longPressTriggered {
                     longPressTriggered = true
+                    scrollDisabled = true
                 }
                 selectedAssets.insert(asset.localIdentifier)
             }
@@ -179,7 +200,7 @@ struct ContentGridView: View {
         }
     }
     
-    private func handleCellDragChanged(value: DragGesture.Value, asset: PHAsset, idx: Int) {
+    private func handleCellDragChanged(value: DragGesture.Value, asset: PHAsset, idx: Int, geometry: GeometryProxy, cellSide: CGFloat) {
         if !isDragging && !longPressTriggered && pressedIndex == nil {
             pressedIndex = idx
             touchStartTime = Date()
@@ -195,16 +216,55 @@ struct ContentGridView: View {
                     
                     withAnimation(.easeInOut(duration: 0.1)) {
                         self.longPressTriggered = true
+                        self.scrollDisabled = true  // Immediately disable scrolling
                     }
                     
                     if !self.selectedAssets.contains(asset.localIdentifier) {
                         self.selectedAssets.insert(asset.localIdentifier)
                     }
                     
+                    // Set up for drag selection immediately
                     self.isDragging = true
                     self.dragStartAsset = asset.localIdentifier
                     self.lastDraggedAsset = asset.localIdentifier
                     self.initialSelectionState = true
+                    self.processedAssets.removeAll()  // Clear processed assets for new drag
+                    self.processedAssets.insert(asset.localIdentifier)  // Mark starting asset as processed
+                }
+            }
+        } else if longPressTriggered && !isDragging {
+            // If we're already in selection mode from a previous long press, start dragging immediately
+            isDragging = true
+            dragStartAsset = asset.localIdentifier
+            lastDraggedAsset = asset.localIdentifier
+            processedAssets.removeAll()  // Clear for new drag session
+            processedAssets.insert(asset.localIdentifier)
+            
+            // Set the initial state based on whether this specific asset is selected
+            // This determines whether we're adding or removing during this drag
+            initialSelectionState = !selectedAssets.contains(asset.localIdentifier)
+            
+            // Only update selection if we're starting on an unselected item
+            if initialSelectionState {
+                updateSelection(for: asset.localIdentifier)
+            }
+        } else if isDragging && longPressTriggered {
+            // Continue drag selection - use the local coordinate space
+            // Convert to grid coordinates for consistent calculation
+            let locationInGrid = CGPoint(
+                x: value.location.x + CGFloat(idx % columnCount) * (cellSide + spacing),
+                y: value.location.y + CGFloat(idx / columnCount) * (cellSide + spacing)
+            )
+            
+            if let currentAsset = getAssetAt(location: locationInGrid, in: geometry, cellSide: cellSide) {
+                if currentAsset.localIdentifier != lastDraggedAsset {
+                    lastDraggedAsset = currentAsset.localIdentifier
+                    
+                    // Only process each asset once per drag session
+                    if !processedAssets.contains(currentAsset.localIdentifier) {
+                        processedAssets.insert(currentAsset.localIdentifier)
+                        updateSelection(for: currentAsset.localIdentifier)
+                    }
                 }
             }
         }
@@ -221,6 +281,7 @@ struct ContentGridView: View {
             isDragging = false
             dragStartAsset = nil
             lastDraggedAsset = nil
+            processedAssets.removeAll()  // Clear processed assets
             
             let impact = UIImpactFeedbackGenerator(style: .light)
             impact.impactOccurred()
@@ -228,20 +289,32 @@ struct ContentGridView: View {
     }
     
     private func handleGridDragChanged(value: DragGesture.Value, geometry: GeometryProxy, cellSide: CGFloat) {
-        if longPressTriggered && !isDragging {
+        // Fallback grid drag handler
+        if !isDragging {
             isDragging = true
+            processedAssets.removeAll()
             
             if let startAsset = getAssetAt(location: value.startLocation, in: geometry, cellSide: cellSide) {
                 dragStartAsset = startAsset.localIdentifier
+                lastDraggedAsset = startAsset.localIdentifier
                 initialSelectionState = !selectedAssets.contains(startAsset.localIdentifier)
+                processedAssets.insert(startAsset.localIdentifier)
+                
+                if initialSelectionState {
+                    updateSelection(for: startAsset.localIdentifier)
+                }
             }
         }
         
-        if isDragging && longPressTriggered,
+        if isDragging,
            let currentAsset = getAssetAt(location: value.location, in: geometry, cellSide: cellSide) {
             if currentAsset.localIdentifier != lastDraggedAsset {
                 lastDraggedAsset = currentAsset.localIdentifier
-                updateSelection(for: currentAsset.localIdentifier)
+                
+                if !processedAssets.contains(currentAsset.localIdentifier) {
+                    processedAssets.insert(currentAsset.localIdentifier)
+                    updateSelection(for: currentAsset.localIdentifier)
+                }
             }
         }
     }
@@ -267,6 +340,7 @@ struct ContentGridView: View {
             isDragging = false
             dragStartAsset = nil
             lastDraggedAsset = nil
+            processedAssets.removeAll()
             
             let impact = UIImpactFeedbackGenerator(style: .medium)
             impact.impactOccurred()
@@ -274,6 +348,8 @@ struct ContentGridView: View {
         
         if longPressTriggered && selectedAssets.isEmpty {
             longPressTriggered = false
+            scrollDisabled = false
+            initialSelectionState = false
         }
     }
     
