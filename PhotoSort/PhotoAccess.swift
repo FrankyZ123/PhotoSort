@@ -21,12 +21,15 @@ final class PhotoAccess: ObservableObject {
     // Albums the user can pick
     @Published var collections: [PHAssetCollection] = []
     @Published var selectedCollection: PHAssetCollection? {
-        didSet { loadAssets(in: selectedCollection) }
+        didSet {
+            loadAssets(in: selectedCollection)
+        }
     }
 
     // Tags + progress
     @Published var tagStore: TagStore = .shared
     @Published private(set) var sortedCount: Int = 0
+    @Published private(set) var unsortedCount: Int = 0  // Track unsorted photos
     
     // Filter properties
     @Published var activeFilters: Set<PhotoTag> = Set(PhotoTag.allCases) // Show all by default
@@ -46,14 +49,23 @@ final class PhotoAccess: ObservableObject {
         }
     }
     
+    var unsortedFilteredCount: Int {
+        // Count of unsorted photos in current filtered view
+        return filteredAssets.filter { asset in
+            self.tag(for: asset) == nil
+        }.count
+    }
+    
     func setFilter(_ filters: Set<PhotoTag>, showUntagged: Bool) {
         self.activeFilters = filters
         self.showUntagged = showUntagged
+        updateUnsortedCount()
     }
     
     func clearFilters() {
         self.activeFilters = Set(PhotoTag.allCases)
         self.showUntagged = true
+        updateUnsortedCount()
     }
     
     var isFilterActive: Bool {
@@ -169,6 +181,7 @@ final class PhotoAccess: ObservableObject {
                 self.assets = tmp
                 self.photoCount = tmp.count
                 self.recomputeSortedCount()
+                self.updateUnsortedCount()
             }
         }
     }
@@ -178,6 +191,18 @@ final class PhotoAccess: ObservableObject {
         sortedCount = ids.reduce(into: 0) { acc, id in
             if tagStore.tag(for: id) != nil { acc += 1 }
         }
+        
+        // Also update unsorted count
+        unsortedCount = assets.count - sortedCount
+    }
+    
+    private func updateUnsortedCount() {
+        // Update the count of unsorted photos in current view
+        let unsorted = unsortedFilteredCount
+        unsortedCount = unsorted
+        
+        // Update badge manager
+        BadgeManager.shared.setUnsortedCount(unsorted)
     }
 
     // MARK: - Tags API
@@ -189,6 +214,7 @@ final class PhotoAccess: ObservableObject {
     func setTag(_ tag: PhotoTag?, for asset: PHAsset) {
         tagStore.setTag(tag, for: asset.localIdentifier)
         recomputeSortedCount()
+        updateUnsortedCount()
     }
 
     // Clear tags for currently shown album/grid
@@ -196,6 +222,7 @@ final class PhotoAccess: ObservableObject {
         let ids = assets.map { $0.localIdentifier }
         for id in ids { tagStore.setTag(nil, for: id) }
         recomputeSortedCount()
+        updateUnsortedCount()
     }
 
     // MARK: - Process Photos (Delete tagged photos)
@@ -234,6 +261,7 @@ final class PhotoAccess: ObservableObject {
                         }
                         
                         self.recomputeSortedCount()
+                        self.updateUnsortedCount()
                         continuation.resume(returning: (deleted: photosToDelete.count, errors: []))
                     } else {
                         let errorMessage = error?.localizedDescription ?? "Unknown error occurred while deleting photos"

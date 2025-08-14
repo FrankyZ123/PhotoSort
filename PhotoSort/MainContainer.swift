@@ -10,6 +10,7 @@ import Photos
 
 struct MainContainerView: View {
     @StateObject private var access = PhotoAccess()
+    @EnvironmentObject var badgeManager: BadgeManager
     
     @State private var showDetail = false
     @State private var selectedIndex = 0
@@ -50,6 +51,10 @@ struct MainContainerView: View {
             access.refreshStatus()
             access.requestAccessAndLoad()
             successHaptic.prepare()
+        }
+        .onChange(of: access.unsortedCount) { newCount in
+            // Update badge manager when unsorted count changes
+            badgeManager.setUnsortedCount(newCount)
         }
     }
     

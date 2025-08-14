@@ -7,9 +7,13 @@
 
 import SwiftUI
 import os
+import UserNotifications
 
 @main
 struct PhotoSortApp: App {
+    @UIApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var badgeManager = BadgeManager.shared
+    
     init() {
         // Configure image cache for better performance
         configureImageCache()
@@ -23,6 +27,15 @@ struct PhotoSortApp: App {
     var body: some Scene {
         WindowGroup {
             MainContainerView()
+                .environmentObject(badgeManager)
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+                    // Update badge when app goes to background
+                    badgeManager.updateBadgeCount()
+                }
+                .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+                    // Clear badge when app becomes active
+                    badgeManager.clearBadge()
+                }
         }
     }
     
@@ -67,4 +80,50 @@ struct PhotoSortApp: App {
         }
     }
     #endif
+}
+
+// App Delegate for handling notifications
+class AppDelegate: NSObject, UIApplicationDelegate {
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey : Any]? = nil) -> Bool {
+        // Request notification permissions for badge updates
+        UNUserNotificationCenter.current().requestAuthorization(options: [.badge]) { granted, error in
+            if granted {
+                print("Badge notification permission granted")
+            } else if let error = error {
+                print("Badge notification error: \(error)")
+            }
+        }
+        return true
+    }
+}
+
+// Badge Manager to handle badge count updates
+@MainActor
+class BadgeManager: ObservableObject {
+    static let shared = BadgeManager()
+    @Published var unsortedCount: Int = 0
+    
+    private init() {}
+    
+    func updateBadgeCount() {
+        // Update the app badge with unsorted count
+        UNUserNotificationCenter.current().setBadgeCount(unsortedCount) { error in
+            if let error = error {
+                print("Error setting badge count: \(error)")
+            }
+        }
+    }
+    
+    func clearBadge() {
+        // Clear badge when app is active
+        UNUserNotificationCenter.current().setBadgeCount(0) { error in
+            if let error = error {
+                print("Error clearing badge: \(error)")
+            }
+        }
+    }
+    
+    func setUnsortedCount(_ count: Int) {
+        unsortedCount = count
+    }
 }
